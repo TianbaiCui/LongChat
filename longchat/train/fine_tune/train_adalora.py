@@ -32,7 +32,7 @@ from longchat.train.monkey_patch.llama_condense_monkey_patch import (
     replace_llama_with_condense,
 )
 
-replace_llama_with_condense(ratio=2)
+# replace_llama_with_condense(ratio=2)
 
 from longchat.train.monkey_patch.llama_flash_attn_monkey_patch import (
     replace_llama_attn_with_flash_attn,
@@ -122,7 +122,6 @@ def preprocess(
             # assert role == conv.roles[j % 2], f"{i}"
             conv.append_message(role, sentence["value"])
         conversations.append(conv.get_prompt())
-        print(conversations)
     #        assert False
 
     # Tokenize conversations
@@ -291,32 +290,35 @@ def train():
         padding_side="right",
         use_fast=False,
     )
-    config = AdaLoraConfig(
-        target_r=4,
-        init_r=8,
-        tinit=500,
-        tfinal=1500,
-        deltaT=10,
-        beta1=0.85,
-        beta2=0.85,
-        target_modules=["q_proj", "v_proj", "k_proj"],
-        lora_dropout=0.05
-        # orth_reg_weight,
-        # rank_pattern
-    )
-
-    # config = LoraConfig(
-    #    r=256, #attention heads
-    #    lora_alpha=32, #alpha scaling
-    #    target_modules=["q_proj", "v_proj"], #if you know the
-    #    lora_dropout=0.05,
-    #    bias="none",
-    #    task_type="CAUSAL_LM" # set this for CLM or Seq2Seq
+    # config = AdaLoraConfig(
+    #    target_r=4,
+    #    init_r=8,
+    #    tinit=500,
+    #    tfinal=1500,
+    #    deltaT=10,
+    #    beta1=0.85,
+    #    beta2=0.85,
+    #    target_modules=["q_proj", "v_proj", "k_proj"],
+    #    lora_dropout=0.05
+    #    # orth_reg_weight,
+    #    # rank_pattern
     # )
+
+    config = LoraConfig(
+        r=16,  # attention heads
+        lora_alpha=32,  # alpha scaling
+        target_modules=["q_proj", "v_proj"],  # if you know the
+        lora_dropout=0.05,
+        bias="none",
+        task_type="CAUSAL_LM",  # set this for CLM or Seq2Seq
+    )
 
     model = get_peft_model(model, config)
     print_trainable_parameters(model)
     tokenizer.pad_token = tokenizer.unk_token
+    model.config.use_cache = False
+    if training_args.gradient_checkpointing:
+        model.enable_input_require_grads()
 
     data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
     # import os
