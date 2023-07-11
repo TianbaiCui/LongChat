@@ -85,8 +85,8 @@ def preprocess(
     # Apply prompt templates
     conversations = []
     for i, source in enumerate(sources):
-        #if source[0]["from"] not in roles.keys() or roles[source[0]["from"]] != conv.roles[0]:
-        if  roles[source[0]["from"]] != conv.roles[0]:
+        # if source[0]["from"] not in roles.keys() or roles[source[0]["from"]] != conv.roles[0]:
+        if roles[source[0]["from"]] != conv.roles[0]:
             # Skip the first one if it is not from human
             source = source[1:]
 
@@ -98,11 +98,11 @@ def preprocess(
                 print("skipping misaligned rounds")
                 skipped += 1
                 continue
-            #assert role == conv.roles[j % 2], f"{i}"
+            # assert role == conv.roles[j % 2], f"{i}"
             conv.append_message(role, sentence["value"])
         conversations.append(conv.get_prompt())
-#        print(conversations)
-#        assert False
+    #        print(conversations)
+    #        assert False
 
     # Tokenize conversations
     input_ids = tokenizer(
@@ -157,7 +157,9 @@ def preprocess(
 class SupervisedDataset(Dataset):
     """Dataset for supervised fine-tuning."""
 
-    def __init__(self, data_path: str, tokenizer: transformers.PreTrainedTokenizer, num_data: int):
+    def __init__(
+        self, data_path: str, tokenizer: transformers.PreTrainedTokenizer, num_data: int
+    ):
         super(SupervisedDataset, self).__init__()
         rank0_print("Loading data...")
         list_data_dict = json.load(open(data_path, "r"))
@@ -186,7 +188,9 @@ class SupervisedDataset(Dataset):
 class LazySupervisedDataset(Dataset):
     """Dataset for supervised fine-tuning."""
 
-    def __init__(self, data_path: str, tokenizer: transformers.PreTrainedTokenizer, num_data: int):
+    def __init__(
+        self, data_path: str, tokenizer: transformers.PreTrainedTokenizer, num_data: int
+    ):
         super(LazySupervisedDataset, self).__init__()
         self.tokenizer = tokenizer
 
@@ -224,7 +228,9 @@ def make_supervised_data_module(
     dataset_cls = (
         LazySupervisedDataset if data_args.lazy_preprocess else SupervisedDataset
     )
-    train_dataset = dataset_cls(tokenizer=tokenizer, data_path=data_args.data_path, num_data=data_args.num_data)
+    train_dataset = dataset_cls(
+        tokenizer=tokenizer, data_path=data_args.data_path, num_data=data_args.num_data
+    )
     return dict(train_dataset=train_dataset, eval_dataset=None)
 
 
@@ -250,8 +256,8 @@ def train():
     tokenizer.pad_token = tokenizer.unk_token
 
     data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
-    #import os
-    #os.environ["WANDB_DISABLED"] = "true"
+    # import os
+    # os.environ["WANDB_DISABLED"] = "true"
     trainer = Trainer(
         model=model, tokenizer=tokenizer, args=training_args, **data_module
     )

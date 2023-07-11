@@ -39,6 +39,10 @@ from longchat.train.monkey_patch.llama_flash_attn_monkey_patch import (
 )
 
 replace_llama_attn_with_flash_attn()
+# replace_llama_attn_with_xformer()
+import os
+
+os.environ["WANDB_PROJECT"] = "open-llama-sft"
 
 IGNORE_TOKEN_ID = LabelSmoother.ignore_index
 
@@ -98,11 +102,11 @@ def preprocess(
 
     # Apply prompt templates
     conversations = []
-    sources = sources["conversations"]
-    system_prompt = sources["system_prompt"]
-    conv.system = system_prompt
     for i, source in enumerate(sources):
         # if source[0]["from"] not in roles.keys() or roles[source[0]["from"]] != conv.roles[0]:
+        if source["system_prompt"]:
+            conv.system = source["system_prompt"]
+        source = source["conversations"]
         if roles[source[0]["from"]] != conv.roles[0]:
             # Skip the first one if it is not from human
             source = source[1:]
@@ -118,7 +122,7 @@ def preprocess(
             # assert role == conv.roles[j % 2], f"{i}"
             conv.append_message(role, sentence["value"])
         conversations.append(conv.get_prompt())
-    #        print(conversations)
+        print(conversations)
     #        assert False
 
     # Tokenize conversations
@@ -184,7 +188,7 @@ class SupervisedDataset(Dataset):
         if num_data != -1:
             list_data_dict = list_data_dict[:num_data]
         rank0_print("Formatting inputs...")
-        sources = [example["conversations"] for example in list_data_dict]
+        sources = [example["vicuna_format"] for example in list_data_dict]
         data_dict = preprocess(sources, tokenizer)
 
         self.input_ids = data_dict["input_ids"]
@@ -277,8 +281,10 @@ def train():
     model = transformers.LlamaForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         cache_dir=training_args.cache_dir,
+        load_in_8bit=True,
+        device_map="auto",
     )
-    tokenizer = transformers.LlamaTokenizer.from_pretrained(
+    tokenizer = transformers.AutoTokenizer.from_pretrained(
         model_args.model_name_or_path,
         cache_dir=training_args.cache_dir,
         model_max_length=training_args.model_max_length,

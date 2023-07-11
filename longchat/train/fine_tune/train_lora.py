@@ -28,7 +28,7 @@ import transformers
 from transformers import Trainer, BitsAndBytesConfig, deepspeed
 import torch
 
-from fastchat.train.train import (
+from train import (
     DataArguments,
     ModelArguments,
     TrainingArguments,
@@ -91,6 +91,21 @@ def get_peft_state_maybe_zero_3(named_params, bias):
     return to_return
 
 
+def print_trainable_parameters(model):
+    """
+    Prints the number of trainable parameters in the model.
+    """
+    trainable_params = 0
+    all_param = 0
+    for _, param in model.named_parameters():
+        all_param += param.numel()
+        if param.requires_grad:
+            trainable_params += param.numel()
+    print(
+        f"trainable params: {(trainable_params/1e9):.2f}B || all params: {(all_param/1e9):.2f}B || trainable%: {100 * trainable_params / all_param}"
+    )
+
+
 def train():
     parser = transformers.HfArgumentParser(
         (ModelArguments, DataArguments, TrainingArguments, LoraArguments)
@@ -121,7 +136,9 @@ def train():
     model = transformers.AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         cache_dir=training_args.cache_dir,
-        device_map=device_map,
+        load_in_8bit=True,
+        device_map="auto",
+        # device_map=device_map,
         quantization_config=BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_use_double_quant=True,
@@ -150,6 +167,7 @@ def train():
             model.model_parallel = True
 
     model = get_peft_model(model, lora_config)
+    print_trainable_parameters(model)
     if training_args.deepspeed is not None and training_args.local_rank == 0:
         model.print_trainable_parameters()
 
