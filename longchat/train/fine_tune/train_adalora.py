@@ -20,19 +20,28 @@ import pathlib
 from typing import Dict, Optional, Sequence
 
 import torch
-from torch.utils.data import Dataset
+
 import transformers
 from transformers import Trainer
 from transformers.trainer_pt_utils import LabelSmoother
 from peft import LoraConfig, get_peft_model, AdaLoraConfig
 
 from longchat.conversation import get_default_conv_template, SeparatorStyle
+from longchat.train.custom_data.datamodule import (
+    LazySupervisedDataset,
+    SupervisedDataset,
+)
+
+from longchat.train.utils.io_utils import (
+    print_trainable_parameters,
+    safe_save_model_for_hf_trainer,
+)
 
 from longchat.train.monkey_patch.llama_condense_monkey_patch import (
     replace_llama_with_condense,
 )
 
-# replace_llama_with_condense(ratio=2)
+replace_llama_with_condense(ratio=1.5)
 
 from longchat.train.monkey_patch.llama_flash_attn_monkey_patch import (
     replace_llama_attn_with_flash_attn,
@@ -54,9 +63,7 @@ class ModelArguments:
 
 @dataclass
 class DataArguments:
-    data_path: str = field(
-        default=None, metadata={"help": "Path to the training data."}
-    )
+    data_path: str = field(default="", metadata={"help": "Path to the training data."})
     num_data: int = field(
         default=-1, metadata={"help": "Number of training data to use."}
     )
@@ -82,15 +89,6 @@ local_rank = None
 def rank0_print(*args):
     if local_rank == 0:
         print(*args)
-
-
-def safe_save_model_for_hf_trainer(trainer: transformers.Trainer, output_dir: str):
-    """Collects the state dict and dump to disk."""
-    state_dict = trainer.model.state_dict()
-    if trainer.args.should_save:
-        cpu_state_dict = {key: value.cpu() for key, value in state_dict.items()}
-        del state_dict
-        trainer._save(output_dir, state_dict=cpu_state_dict)  # noqa
 
 
 def preprocess(
@@ -174,75 +172,9 @@ def preprocess(
     )
 
 
-class SupervisedDataset(Dataset):
-    """Dataset for supervised fine-tuning."""
-
-    def __init__(
-        self, data_path: str, tokenizer: transformers.PreTrainedTokenizer, num_data: int
-    ):
-        super(SupervisedDataset, self).__init__()
-        rank0_print("Loading data...")
-        list_data_dict = json.load(open(data_path, "r"))
-
-        if num_data != -1:
-            list_data_dict = list_data_dict[:num_data]
-        rank0_print("Formatting inputs...")
-        sources = [example["vicuna_format"] for example in list_data_dict]
-        data_dict = preprocess(sources, tokenizer)
-
-        self.input_ids = data_dict["input_ids"]
-        self.labels = data_dict["labels"]
-        self.attention_mask = data_dict["attention_mask"]
-
-    def __len__(self):
-        return len(self.input_ids)
-
-    def __getitem__(self, i) -> Dict[str, torch.Tensor]:
-        return dict(
-            input_ids=self.input_ids[i],
-            labels=self.labels[i],
-            attention_mask=self.attention_mask[i],
-        )
-
-
-class LazySupervisedDataset(Dataset):
-    """Dataset for supervised fine-tuning."""
-
-    def __init__(
-        self, data_path: str, tokenizer: transformers.PreTrainedTokenizer, num_data: int
-    ):
-        super(LazySupervisedDataset, self).__init__()
-        self.tokenizer = tokenizer
-
-        rank0_print("Loading data...")
-        list_data_dict = json.load(open(data_path, "r"))
-        print(len(list_data_dict))
-        if num_data != -1:
-            list_data_dict = list_data_dict[:num_data]
-        print(len(list_data_dict))
-        rank0_print("Formatting inputs...Skip in lazy mode")
-        self.tokenizer = tokenizer
-        self.list_data_dict = list_data_dict
-
-    def __len__(self):
-        return len(self.list_data_dict)
-
-    def __getitem__(self, i) -> Dict[str, torch.Tensor]:
-        sources = self.list_data_dict[i]
-        if isinstance(i, int):
-            sources = [sources]
-        data_dict = preprocess([e["vicuna_format"] for e in sources], self.tokenizer)
-        if isinstance(i, int):
-            data_dict = dict(
-                input_ids=data_dict["input_ids"][0],
-                labels=data_dict["labels"][0],
-                attention_mask=data_dict["attention_mask"][0],
-            )
-        return data_dict
-
-
 def make_supervised_data_module(
-    tokenizer: transformers.PreTrainedTokenizer, data_args
+    tokenizer: transformers.PreTrainedTokenizer | transformers.PreTrainedTokenizerFast,
+    data_args,
 ) -> Dict:
     """Make dataset and collator for supervised fine-tuning."""
     dataset_cls = (
@@ -254,26 +186,11 @@ def make_supervised_data_module(
     return dict(train_dataset=train_dataset, eval_dataset=None)
 
 
-def print_trainable_parameters(model):
-    """
-    Prints the number of trainable parameters in the model.
-    """
-    trainable_params = 0
-    all_param = 0
-    for _, param in model.named_parameters():
-        all_param += param.numel()
-        if param.requires_grad:
-            trainable_params += param.numel()
-    print(
-        f"trainable params: {(trainable_params/1e9):.2f}B || all params: {(all_param/1e9):.2f}B || trainable%: {100 * trainable_params / all_param}"
-    )
-
-
 def train():
     global local_rank
 
     parser = transformers.HfArgumentParser(
-        (ModelArguments, DataArguments, TrainingArguments)
+        (ModelArguments, DataArguments, TrainingArguments)  # type: ignore
     )
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
     local_rank = training_args.local_rank
@@ -313,12 +230,12 @@ def train():
         task_type="CAUSAL_LM",  # set this for CLM or Seq2Seq
     )
 
-    model = get_peft_model(model, config)
+    model = get_peft_model(model, config)  # type: ignore
     print_trainable_parameters(model)
     tokenizer.pad_token = tokenizer.unk_token
     model.config.use_cache = False
     if training_args.gradient_checkpointing:
-        model.enable_input_require_grads()
+        model.enable_input_require_grads()  # type: ignore
 
     data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
     # import os
