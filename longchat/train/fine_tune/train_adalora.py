@@ -13,12 +13,13 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
-import copy
+
 from dataclasses import dataclass, field
-import json
+import torch
 import pathlib
 from typing import Dict, Optional
 
+import evaluate
 import transformers
 from transformers import Trainer
 from transformers.data.data_collator import DataCollatorWithPadding
@@ -29,6 +30,7 @@ from longchat.train.custom_data.datamodule import (
     LazySupervisedDataset,
     SupervisedDataset,
     train_val_dataset,
+    IGNORE_TOKEN_ID,
 )
 
 from longchat.train.utils.io_utils import (
@@ -78,7 +80,7 @@ class TrainingArguments(transformers.TrainingArguments):
         },
     )
     report_to: str = field(default="wandb")
-    remove_unused_columns: bool = field(default=False)
+    remove_unused_columns: bool = field(default=True)
     dataloader_pin_memory: bool = field(default=True)
     dataloader_num_workers: int = field(default=8)
 
@@ -94,8 +96,52 @@ def make_supervised_data_module(
     dataset = dataset_cls(
         tokenizer=tokenizer, data_path=data_args.data_path, num_data=data_args.num_data
     )
-    train_dataset, eval_dataset = train_val_dataset(dataset, val_split=0.02)
+    train_dataset, eval_dataset = train_val_dataset(dataset, val_split=0.0001)
     return dict(train_dataset=train_dataset, eval_dataset=eval_dataset)
+
+
+def default_preprocess(eval_pred, ignote_negative_labels=True):
+    preds, labels = eval_pred.predictions, eval_pred.label_ids
+
+    if not ignote_negative_labels:
+        return preds, labels
+
+    mask = labels != IGNORE_TOKEN_ID
+    return preds[mask], labels[mask]
+
+
+# def get_metrics(conf, tokenizer):
+#     # the reason behind using a list is that we might want to extend the list of our
+#     # metrics in the future for more thorough evaluation
+#     metrics, preprocess_fns = [evaluate.load("accuracy")], [default_preprocess]
+#
+#     # if any(dataset in QA_DATASETS for dataset in conf.datasets):
+#     #     raise ValueError("TODO")
+#     #     metrics.append(evaluate.load("squad_v2"))
+#     #     preprocess_fns.append(preprocess_qa)
+#     # if any(dataset in SUMMARIZATION_DATASETS for dataset in conf.datasets):
+#     #     raise ValueError("TODO")
+#     #     metrics.append(evaluate.load("rouge"))
+#     #     preprocess_fns.append(
+#     #         partial(preprocess_summarization, tokenizer, ignore_pad_token_for_loss=conf.ignore_pad_token_for_loss)
+#     #     )
+#
+#     return metrics, preprocess_fns
+
+
+def compute_metrics(eval_pred):
+    out = {}
+    metrics, preprocess_fns = [evaluate.load("accuracy")], [default_preprocess]
+    for metric, preprocess_fn in zip(metrics, preprocess_fns):
+        preds, labels = preprocess_fn(eval_pred)
+        out = dict(**out, **metric.compute(predictions=preds, references=labels))
+
+    return out
+
+
+def preprocess_logits_for_metrics(logits, labels):
+    pred_ids = torch.argmax(logits, dim=-1)
+    return pred_ids
 
 
 def train():
@@ -119,28 +165,28 @@ def train():
         padding_side="right",
         use_fast=False,
     )
-    config = AdaLoraConfig(
-        target_r=4,
-        init_r=8,
-        tinit=500,
-        tfinal=1500,
-        deltaT=10,
-        beta1=0.85,
-        beta2=0.85,
-        target_modules=["q_proj", "v_proj", "k_proj"],
-        lora_dropout=0.05
-        # orth_reg_weight,
-        # rank_pattern
-    )
+    # config = AdaLoraConfig(
+    #     target_r=4,
+    #     init_r=8,
+    #     tinit=500,
+    #     tfinal=1500,
+    #     deltaT=10,
+    #     beta1=0.85,
+    #     beta2=0.85,
+    #     target_modules=["q_proj", "v_proj", "k_proj"],
+    #     lora_dropout=0.05
+    #     # orth_reg_weight,
+    #     # rank_pattern
+    # )
 
-    #    config = LoraConfig(
-    #        r=16,  # attention heads
-    #        lora_alpha=32,  # alpha scaling
-    #        target_modules=["q_proj", "v_proj"],  # if you know the
-    #        lora_dropout=0.05,
-    #        bias="none",
-    #        task_type="CAUSAL_LM",  # set this for CLM or Seq2Seq
-    #    )
+    config = LoraConfig(
+        r=16,  # attention heads
+        lora_alpha=32,  # alpha scaling
+        target_modules=["q_proj", "v_proj"],  # if you know the
+        lora_dropout=0.05,
+        bias="none",
+        task_type="CAUSAL_LM",  # set this for CLM or Seq2Seq
+    )
 
     model = get_peft_model(model, config)  # type: ignore
     print_trainable_parameters(model)
@@ -149,14 +195,16 @@ def train():
     if training_args.gradient_checkpointing:
         model.enable_input_require_grads()  # type: ignore
 
-    data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
+    data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)  # type: ignore
     # import os
     # os.environ["WANDB_DISABLED"] = "true"
     trainer = Trainer(
         model=model,
         tokenizer=tokenizer,
         args=training_args,
-        data_collator=DataCollatorWithPadding,
+        data_collator=DataCollatorWithPadding(tokenizer=tokenizer),
+        compute_metrics=compute_metrics,
+        preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         **data_module,
     )
 

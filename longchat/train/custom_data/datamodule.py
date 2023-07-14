@@ -16,6 +16,16 @@ def rank0_print(*args):
         print(*args)
 
 
+def default_preprocess(eval_pred, ignote_negative_labels=True):
+    preds, labels = eval_pred.predictions, eval_pred.label_ids
+
+    if not ignote_negative_labels:
+        return preds, labels
+
+    mask = labels > 0
+    return preds[mask], labels[mask]
+
+
 def preprocess(
     sources,
     tokenizer: transformers.PreTrainedTokenizer,
