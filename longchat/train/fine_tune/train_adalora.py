@@ -17,19 +17,18 @@ import copy
 from dataclasses import dataclass, field
 import json
 import pathlib
-from typing import Dict, Optional, Sequence
-
-import torch
+from typing import Dict, Optional
 
 import transformers
 from transformers import Trainer
-from transformers.trainer_pt_utils import LabelSmoother
+from transformers.data.data_collator import DataCollatorWithPadding
 from peft import LoraConfig, get_peft_model, AdaLoraConfig
 
-from longchat.conversation import get_default_conv_template, SeparatorStyle
+
 from longchat.train.custom_data.datamodule import (
     LazySupervisedDataset,
     SupervisedDataset,
+    train_val_dataset,
 )
 
 from longchat.train.utils.io_utils import (
@@ -52,8 +51,6 @@ replace_llama_attn_with_flash_attn()
 import os
 
 os.environ["WANDB_PROJECT"] = "open-llama-sft"
-
-IGNORE_TOKEN_ID = LabelSmoother.ignore_index
 
 
 @dataclass
@@ -81,109 +78,24 @@ class TrainingArguments(transformers.TrainingArguments):
         },
     )
     report_to: str = field(default="wandb")
-
-
-local_rank = None
-
-
-def rank0_print(*args):
-    if local_rank == 0:
-        print(*args)
-
-
-def preprocess(
-    sources,
-    tokenizer: transformers.PreTrainedTokenizer,
-) -> Dict:
-    conv = get_default_conv_template("vicuna").copy()
-    roles = {"human": conv.roles[0], "gpt": conv.roles[1]}
-
-    # Apply prompt templates
-    conversations = []
-    for i, source in enumerate(sources):
-        # if source[0]["from"] not in roles.keys() or roles[source[0]["from"]] != conv.roles[0]:
-        if source["system_prompt"]:
-            conv.system = source["system_prompt"]
-        source = source["conversations"]
-        if roles[source[0]["from"]] != conv.roles[0]:
-            # Skip the first one if it is not from human
-            source = source[1:]
-
-        conv.messages = []
-        skipped = 0
-        for j, sentence in enumerate(source):
-            role = roles[sentence["from"]]
-            if role != conv.roles[(j - skipped) % 2]:
-                print("skipping misaligned rounds")
-                skipped += 1
-                continue
-            # assert role == conv.roles[j % 2], f"{i}"
-            conv.append_message(role, sentence["value"])
-        conversations.append(conv.get_prompt())
-    #        assert False
-
-    # Tokenize conversations
-    input_ids = tokenizer(
-        conversations,
-        return_tensors="pt",
-        padding="max_length",
-        max_length=tokenizer.model_max_length,
-        truncation=True,
-    ).input_ids
-    targets = input_ids.clone()
-
-    assert conv.sep_style == SeparatorStyle.TWO
-
-    # Mask targets
-    sep = conv.sep + conv.roles[1] + ": "
-    for conversation, target in zip(conversations, targets):
-        total_len = int(target.ne(tokenizer.pad_token_id).sum())
-
-        rounds = conversation.split(conv.sep2)
-        cur_len = 1
-        for i, rou in enumerate(rounds):
-            if rou == "":
-                break
-
-            parts = rou.split(sep)
-            if len(parts) != 2:
-                break
-            parts[0] += sep
-            round_len = len(tokenizer(rou).input_ids)
-            instruction_len = len(tokenizer(parts[0]).input_ids) - 2
-
-            target[cur_len : cur_len + instruction_len] = IGNORE_TOKEN_ID
-
-            # rank0_print(tokenizer.decode(target[cur_len+instruction_len:cur_len+round_len]))
-
-            cur_len += round_len
-        target[cur_len:] = IGNORE_TOKEN_ID
-
-        if cur_len < tokenizer.model_max_length:
-            if cur_len != total_len:
-                rank0_print(
-                    f"WARNING: tokenization mismatch " f"{cur_len} vs. {total_len}"
-                )
-
-    return dict(
-        input_ids=input_ids,
-        labels=targets,
-        attention_mask=input_ids.ne(tokenizer.pad_token_id),
-    )
+    remove_unused_columns: bool = field(default=False)
+    dataloader_pin_memory: bool = field(default=True)
+    dataloader_num_workers: int = field(default=8)
 
 
 def make_supervised_data_module(
-    tokenizer: transformers.PreTrainedTokenizer | transformers.PreTrainedTokenizerFast,
+    tokenizer: transformers.PreTrainedTokenizer,
     data_args,
 ) -> Dict:
     """Make dataset and collator for supervised fine-tuning."""
     dataset_cls = (
         LazySupervisedDataset if data_args.lazy_preprocess else SupervisedDataset
     )
-    train_dataset = dataset_cls(
+    dataset = dataset_cls(
         tokenizer=tokenizer, data_path=data_args.data_path, num_data=data_args.num_data
     )
-    return dict(train_dataset=train_dataset, eval_dataset=None)
+    train_dataset, eval_dataset = train_val_dataset(dataset, val_split=0.02)
+    return dict(train_dataset=train_dataset, eval_dataset=eval_dataset)
 
 
 def train():
@@ -207,28 +119,28 @@ def train():
         padding_side="right",
         use_fast=False,
     )
-    # config = AdaLoraConfig(
-    #    target_r=4,
-    #    init_r=8,
-    #    tinit=500,
-    #    tfinal=1500,
-    #    deltaT=10,
-    #    beta1=0.85,
-    #    beta2=0.85,
-    #    target_modules=["q_proj", "v_proj", "k_proj"],
-    #    lora_dropout=0.05
-    #    # orth_reg_weight,
-    #    # rank_pattern
-    # )
-
-    config = LoraConfig(
-        r=16,  # attention heads
-        lora_alpha=32,  # alpha scaling
-        target_modules=["q_proj", "v_proj"],  # if you know the
-        lora_dropout=0.05,
-        bias="none",
-        task_type="CAUSAL_LM",  # set this for CLM or Seq2Seq
+    config = AdaLoraConfig(
+        target_r=4,
+        init_r=8,
+        tinit=500,
+        tfinal=1500,
+        deltaT=10,
+        beta1=0.85,
+        beta2=0.85,
+        target_modules=["q_proj", "v_proj", "k_proj"],
+        lora_dropout=0.05
+        # orth_reg_weight,
+        # rank_pattern
     )
+
+    #    config = LoraConfig(
+    #        r=16,  # attention heads
+    #        lora_alpha=32,  # alpha scaling
+    #        target_modules=["q_proj", "v_proj"],  # if you know the
+    #        lora_dropout=0.05,
+    #        bias="none",
+    #        task_type="CAUSAL_LM",  # set this for CLM or Seq2Seq
+    #    )
 
     model = get_peft_model(model, config)  # type: ignore
     print_trainable_parameters(model)
@@ -241,7 +153,11 @@ def train():
     # import os
     # os.environ["WANDB_DISABLED"] = "true"
     trainer = Trainer(
-        model=model, tokenizer=tokenizer, args=training_args, **data_module
+        model=model,
+        tokenizer=tokenizer,
+        args=training_args,
+        data_collator=DataCollatorWithPadding,
+        **data_module,
     )
 
     if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):
