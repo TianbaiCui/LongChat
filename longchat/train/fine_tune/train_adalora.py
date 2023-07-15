@@ -30,6 +30,7 @@ from longchat.train.custom_data.datamodule import (
     LazySupervisedDataset,
     SupervisedDataset,
     VicunaFormatDataset,
+    DialogueDataCollator,
     train_val_dataset,
     IGNORE_TOKEN_ID,
 )
@@ -205,7 +206,12 @@ def train():
         model=model,
         tokenizer=tokenizer,
         args=training_args,
-        data_collator=DataCollatorWithPadding(tokenizer=tokenizer),
+        data_collator=DialogueDataCollator(
+            tokenizer=tokenizer,
+            pad_to_multiple_of=16,
+            padding=True,
+            max_length=training_args.model_max_length,
+        ),
         compute_metrics=compute_metrics,
         preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         train_dataset=train_dataset,

@@ -273,7 +273,7 @@ class DialogueDataCollator:
         tokenized_text = tokenizer(
             conv.get_prompt(),
             padding=False,
-            max_length=tokenizer.model_max_length,
+            max_length=self.max_length,
             truncation=TruncationStrategy.LONGEST_FIRST,
         )
 
@@ -319,7 +319,7 @@ class DialogueDataCollator:
         )
         targets = torch.roll(batch.input_ids, -1, -1)
         targets = torch.where(
-            label_masks, targets, torch.full_like(targets, LabelSmoother.ignore_index)
+            label_masks, targets, torch.full_like(targets, IGNORE_TOKEN_ID)
         )
         batch["labels"] = targets
 
