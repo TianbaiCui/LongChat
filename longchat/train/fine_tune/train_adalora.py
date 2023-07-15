@@ -82,7 +82,7 @@ class TrainingArguments(transformers.TrainingArguments):
         },
     )
     report_to: str = field(default="wandb")
-    remove_unused_columns: bool = field(default=True)
+    remove_unused_columns: bool = field(default=False)
     dataloader_pin_memory: bool = field(default=True)
     dataloader_num_workers: int = field(default=8)
 

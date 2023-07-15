@@ -245,7 +245,7 @@ class DialogueDataCollator:
     def process_one(
         self,
         source,
-        tokenizer: transformers.PreTrainedTokenizerBase,
+        tokenizer: PreTrainedTokenizerBase,
     ):
         """Preprocess data for supervised fine-tuning."""
         conv = get_default_conv_template("vicuna").copy()
@@ -316,7 +316,7 @@ class DialogueDataCollator:
 
         label_masks = torch.stack(
             [F.pad(torch.tensor(x), (0, dim - len(x)), value=0) for x in label_masks]
-        )
+        ).bool()
         targets = torch.roll(batch.input_ids, -1, -1)
         targets = torch.where(
             label_masks, targets, torch.full_like(targets, IGNORE_TOKEN_ID)
