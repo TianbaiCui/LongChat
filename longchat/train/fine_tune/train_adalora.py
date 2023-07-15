@@ -29,6 +29,7 @@ from peft import LoraConfig, get_peft_model, AdaLoraConfig
 from longchat.train.custom_data.datamodule import (
     LazySupervisedDataset,
     SupervisedDataset,
+    VicunaFormatDataset,
     train_val_dataset,
     IGNORE_TOKEN_ID,
 )
@@ -195,9 +196,11 @@ def train():
     if training_args.gradient_checkpointing:
         model.enable_input_require_grads()  # type: ignore
 
-    data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)  # type: ignore
-    # import os
-    # os.environ["WANDB_DISABLED"] = "true"
+    dataset = VicunaFormatDataset(
+        tokenizer=tokenizer, data_path=data_args.data_path, num_data=data_args.num_data
+    )
+    train_dataset, eval_dataset = train_val_dataset(dataset, val_split=0.0001)
+
     trainer = Trainer(
         model=model,
         tokenizer=tokenizer,
@@ -205,7 +208,8 @@ def train():
         data_collator=DataCollatorWithPadding(tokenizer=tokenizer),
         compute_metrics=compute_metrics,
         preprocess_logits_for_metrics=preprocess_logits_for_metrics,
-        **data_module,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
     )
 
     if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):
