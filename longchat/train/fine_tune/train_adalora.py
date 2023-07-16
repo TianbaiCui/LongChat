@@ -84,22 +84,7 @@ class TrainingArguments(transformers.TrainingArguments):
     report_to: str = field(default="wandb")
     remove_unused_columns: bool = field(default=False)
     dataloader_pin_memory: bool = field(default=True)
-    dataloader_num_workers: int = field(default=8)
-
-
-def make_supervised_data_module(
-    tokenizer: transformers.PreTrainedTokenizer,
-    data_args,
-) -> Dict:
-    """Make dataset and collator for supervised fine-tuning."""
-    dataset_cls = (
-        LazySupervisedDataset if data_args.lazy_preprocess else SupervisedDataset
-    )
-    dataset = dataset_cls(
-        tokenizer=tokenizer, data_path=data_args.data_path, num_data=data_args.num_data
-    )
-    train_dataset, eval_dataset = train_val_dataset(dataset, val_split=0.0001)
-    return dict(train_dataset=train_dataset, eval_dataset=eval_dataset)
+    dataloader_num_workers: int = field(default=12)
 
 
 def default_preprocess(eval_pred, ignote_negative_labels=True):
@@ -200,7 +185,7 @@ def train():
     dataset = VicunaFormatDataset(
         tokenizer=tokenizer, data_path=data_args.data_path, num_data=data_args.num_data
     )
-    train_dataset, eval_dataset = train_val_dataset(dataset, val_split=0.0001)
+    train_dataset, eval_dataset = train_val_dataset(dataset, val_split=0.02)
 
     trainer = Trainer(
         model=model,
