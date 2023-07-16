@@ -301,10 +301,13 @@ class DialogueDataCollator:
     def __call__(self, features):
         flatten_messages = []
         label_masks = []
+        last_indices = []
         for messages in features:
             flatten_message, label_mask = self.process_one(messages, self.tokenizer)
             flatten_messages.append(flatten_message)
             label_masks.append(label_mask)
+            last_indices.append(len(flatten_message.input_ids) - 1)
+        last_indices = torch.tensor(last_indices)
         # packing
         batch = self.tokenizer.pad(
             flatten_messages,
@@ -318,8 +321,14 @@ class DialogueDataCollator:
             [F.pad(torch.tensor(x), (0, dim - len(x)), value=0) for x in label_masks]
         ).bool()
         targets = torch.roll(batch.input_ids, -1, -1)
+        targets[targets == self.tokenizer.bos_token_id] = IGNORE_TOKEN_ID
         targets = torch.where(
             label_masks, targets, torch.full_like(targets, IGNORE_TOKEN_ID)
+        )
+        targets[range(len(targets)), last_indices] = (
+            self.tokenizer.eos_token_id
+            if self.tokenizer.eos_token_id is not None
+            else IGNORE_TOKEN_ID
         )
         batch["labels"] = targets
 
