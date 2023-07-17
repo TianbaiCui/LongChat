@@ -13,6 +13,10 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
+import os, sys
+import yaml
+import argparse
+from transformers import HfArgumentParser
 
 from dataclasses import dataclass, field
 import torch
@@ -20,15 +24,18 @@ import pathlib
 from typing import Dict, Optional
 
 import evaluate
-import transformers
+from transformers import (
+    HfArgumentParser,
+    TrainingArguments,
+    LlamaForCausalLM,
+    LlamaTokenizer,
+)
 from transformers import Trainer
 from transformers.data.data_collator import DataCollatorWithPadding
 from peft import LoraConfig, get_peft_model, AdaLoraConfig
 
 
 from longchat.train.custom_data.datamodule import (
-    LazySupervisedDataset,
-    SupervisedDataset,
     VicunaFormatDataset,
     DialogueDataCollator,
     train_val_dataset,
@@ -52,14 +59,13 @@ from longchat.train.monkey_patch.llama_flash_attn_monkey_patch import (
 
 replace_llama_attn_with_flash_attn()
 # replace_llama_attn_with_xformer()
-import os
 
 os.environ["WANDB_PROJECT"] = "open-llama-sft"
 
 
 @dataclass
 class ModelArguments:
-    model_name_or_path: Optional[str] = field(default="facebook/opt-125m")
+    model_name_or_path: Optional[str] = field(default="openlm-research/open_llama_13b")
 
 
 @dataclass
@@ -72,7 +78,7 @@ class DataArguments:
 
 
 @dataclass
-class TrainingArguments(transformers.TrainingArguments):
+class TrainArguments(TrainingArguments):
     cache_dir: Optional[str] = field(default=None)
     optim: str = field(default="adamw_torch")
     model_max_length: int = field(
@@ -133,19 +139,38 @@ def preprocess_logits_for_metrics(logits, labels):
 
 def train():
     global local_rank
-
-    parser = transformers.HfArgumentParser(
-        (ModelArguments, DataArguments, TrainingArguments)  # type: ignore
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--config_file", type=str, default=None, help="Path to the config file"
     )
-    model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+    parsed_args, unknown = parser.parse_known_args()
+
+    hf_parser = HfArgumentParser(
+        (ModelArguments, DataArguments, TrainArguments)  # type: ignore
+    )
+    model_args, data_args, training_args = hf_parser.parse_args_into_dataclasses()
     local_rank = training_args.local_rank
-    model = transformers.LlamaForCausalLM.from_pretrained(
+    if parsed_args.config_file is not None:
+        # Load config file
+        with open(parsed_args.config_file, "r") as f:
+            config = yaml.safe_load(f)
+        # Use config file values only if the corresponding command-line argument is not set
+        for k, v in config.items():
+            if (
+                getattr(model_args, k, None) is None
+                and getattr(data_args, k, None) is None
+                and getattr(training_args, k, None) is None
+            ):
+                sys.argv += ["--{}={}".format(k, v)]
+    model_args, data_args, training_args = hf_parser.parse_args_into_dataclasses()
+
+    model = LlamaForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         cache_dir=training_args.cache_dir,
         load_in_8bit=True,
         device_map="auto",
     )
-    tokenizer = transformers.AutoTokenizer.from_pretrained(
+    tokenizer = LlamaTokenizer.from_pretrained(
         model_args.model_name_or_path,
         cache_dir=training_args.cache_dir,
         model_max_length=training_args.model_max_length,
