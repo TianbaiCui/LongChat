@@ -6,6 +6,7 @@ from torch.nn import functional as F
 from torch.utils.data import Dataset, Subset
 from sklearn.model_selection import train_test_split
 import transformers
+from transformers import BatchEncoding
 from transformers.trainer_pt_utils import LabelSmoother
 from transformers.tokenization_utils_base import (
     PaddingStrategy,
@@ -223,25 +224,6 @@ class VicunaFormatDataset(Dataset):
         self.tokenizer = tokenizer
         self.list_data_dict = list_data_dict
 
-    def __len__(self):
-        return len(self.list_data_dict)
-
-    def __getitem__(self, i) -> Dict[str, str]:
-        return self.list_data_dict[i]
-
-
-@dataclass
-class DialogueDataCollator:
-    """
-    Expects a list of texts corresponding to a sequence of
-    [question, answer, question, answer, ...] pairs.
-    """
-
-    tokenizer: PreTrainedTokenizerBase
-    padding: Union[bool, str, PaddingStrategy] = True
-    max_length: Optional[int] = None
-    pad_to_multiple_of: Optional[int] = None
-
     def process_one(
         self,
         source,
@@ -273,7 +255,6 @@ class DialogueDataCollator:
         tokenized_text = tokenizer(
             conv.get_prompt(),
             padding=False,
-            max_length=self.max_length,
             truncation=TruncationStrategy.LONGEST_FIRST,
         )
 
@@ -298,16 +279,35 @@ class DialogueDataCollator:
 
         return tokenized_text, label_mask
 
+    def __len__(self):
+        return len(self.list_data_dict)
+
+    def __getitem__(self, i) -> tuple[BatchEncoding, list]:
+        return self.process_one(self.list_data_dict[i], self.tokenizer)
+
+
+@dataclass
+class DialogueDataCollator:
+    """
+    Expects a list of texts corresponding to a sequence of
+    [question, answer, question, answer, ...] pairs.
+    """
+
+    tokenizer: PreTrainedTokenizerBase
+    padding: Union[bool, str, PaddingStrategy] = True
+    max_length: Optional[int] = None
+    pad_to_multiple_of: Optional[int] = None
+
     def __call__(self, features):
-        flatten_messages = []
-        label_masks = []
-        last_indices = []
-        for messages in features:
-            flatten_message, label_mask = self.process_one(messages, self.tokenizer)
-            flatten_messages.append(flatten_message)
-            label_masks.append(label_mask)
-            last_indices.append(len(flatten_message.input_ids) - 1)
-        last_indices = torch.tensor(last_indices)
+        # flatten_messages = []
+        # label_masks = []
+        # last_indices = []
+        flatten_messages, label_masks = zip(*features)
+        # for flatten_message, label_mask in features:
+        #    flatten_messages.append(flatten_message)
+        #    label_masks.append(label_mask)
+        # last_indices.append(len(flatten_message.input_ids) - 1)
+        # last_indices = torch.tensor(last_indices)
         # packing
         batch = self.tokenizer.pad(
             flatten_messages,
@@ -320,16 +320,18 @@ class DialogueDataCollator:
         label_masks = torch.stack(
             [F.pad(torch.tensor(x), (0, dim - len(x)), value=0) for x in label_masks]
         ).bool()
-        targets = torch.roll(batch.input_ids, -1, -1)
-        targets[targets == self.tokenizer.bos_token_id] = IGNORE_TOKEN_ID
+        # labels are shifted in the LlamaForCausalLM forward method: https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py#L772
+        targets = batch.input_ids.clone()
+        # targets = torch.roll(batch.input_ids, -1, -1)
+        # targets[targets == self.tokenizer.bos_token_id] = IGNORE_TOKEN_ID
         targets = torch.where(
             label_masks, targets, torch.full_like(targets, IGNORE_TOKEN_ID)
         )
-        targets[range(len(targets)), last_indices] = (
-            self.tokenizer.eos_token_id
-            if self.tokenizer.eos_token_id is not None
-            else IGNORE_TOKEN_ID
-        )
+        # targets[range(len(targets)), last_indices] = (
+        #     self.tokenizer.eos_token_id
+        #     if self.tokenizer.eos_token_id is not None
+        #     else IGNORE_TOKEN_ID
+        # )
         batch["labels"] = targets
 
         return batch
