@@ -219,7 +219,9 @@ class VicunaFormatDataset(Dataset):
             for line in file:
                 list_data_dict.append(json.loads(line)["vicuna_format"])
         if num_data != -1:
-            list_data_dict = list_data_dict[:num_data]
+            from random import choices
+
+            list_data_dict = choices(list_data_dict, k=num_data)
         print(f"Total number of data: {len(list_data_dict)}")
         self.tokenizer = tokenizer
         self.list_data_dict = list_data_dict
