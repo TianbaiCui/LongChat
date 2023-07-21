@@ -265,7 +265,7 @@ class VicunaFormatDataset(Dataset):
         # Mask targets
         sep_tokens = [
             tokenizer.encode(conv.sep + role + ": ", add_special_tokens=False)
-            for role in conv.roles
+            for role in conv.roles[::-1]
         ]
         window_sizes = [len(sep_token) for sep_token in sep_tokens]
         label_mask = [0 for _ in tokenized_text.input_ids]
@@ -276,6 +276,8 @@ class VicunaFormatDataset(Dataset):
                 tokenized_text.input_ids[i - window_sizes[turn % 2] : i]
                 == sep_tokens[turn % 2]
             ):
+                if turn % 2 == 1:
+                    label_mask[i - window_sizes[1] : i] = [0] * window_sizes[1]
                 turn += 1
             label_mask[i] = turn % 2
 
