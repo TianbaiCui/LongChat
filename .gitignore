@@ -1,5 +1,9 @@
 wandb
 **pycache**
+.DS_Store
 longchat.egg-info/
 */.nfs*
 outputs
+data/human_annotations
+data/test-500
+data/validation_set/*.csv

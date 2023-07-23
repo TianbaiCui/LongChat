@@ -16,6 +16,7 @@
 import os, sys
 import yaml
 import argparse
+from functools import partial
 from transformers import HfArgumentParser
 from deepspeed import zero
 from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
@@ -106,28 +107,28 @@ def default_preprocess(eval_pred, ignote_negative_labels=True):
     return preds[mask], labels[mask]
 
 
-# def get_metrics(conf, tokenizer):
-#     # the reason behind using a list is that we might want to extend the list of our
-#     # metrics in the future for more thorough evaluation
-#     metrics, preprocess_fns = [evaluate.load("accuracy")], [default_preprocess]
-#
-#     # if any(dataset in QA_DATASETS for dataset in conf.datasets):
-#     #     raise ValueError("TODO")
-#     #     metrics.append(evaluate.load("squad_v2"))
-#     #     preprocess_fns.append(preprocess_qa)
-#     # if any(dataset in SUMMARIZATION_DATASETS for dataset in conf.datasets):
-#     #     raise ValueError("TODO")
-#     #     metrics.append(evaluate.load("rouge"))
-#     #     preprocess_fns.append(
-#     #         partial(preprocess_summarization, tokenizer, ignore_pad_token_for_loss=conf.ignore_pad_token_for_loss)
-#     #     )
-#
-#     return metrics, preprocess_fns
+def decode_preprocess(eval_pred, tokenizer):
+    preds, labels = eval_pred.predictions, eval_pred.label_ids
+    preds = preds[..., :-1, :].contiguous()
+    labels = labels[..., 1:].contiguous()
+    mask = labels != IGNORE_TOKEN_ID
+    pred_texts = []
+    label_texts = []
+    for i in range(preds.shape[0]):
+        pred_text = tokenizer.decode(preds[i][mask[i]])
+        label_text = tokenizer.decode(labels[i][mask[i]])
+        pred_texts.append(pred_text)
+        label_texts.append(label_text)
+
+    return pred_texts, label_texts
 
 
-def compute_metrics(eval_pred):
+def compute_metrics(eval_pred, tokenizer):
     out = {}
-    metrics, preprocess_fns = [evaluate.load("accuracy")], [default_preprocess]
+    metrics, preprocess_fns = [evaluate.load("accuracy"), evaluate.load("rouge")], [
+        default_preprocess,
+        partial(decode_preprocess, tokenizer=tokenizer),
+    ]
     for metric, preprocess_fn in zip(metrics, preprocess_fns):
         preds, labels = preprocess_fn(eval_pred)
         out = dict(**out, **metric.compute(predictions=preds, references=labels))
@@ -258,7 +259,23 @@ def train():
     dataset = VicunaFormatDataset(
         tokenizer=tokenizer, data_path=data_args.data_path, num_data=data_args.num_data
     )
-    train_dataset, eval_dataset = train_val_dataset(dataset, val_split=0.032)
+    eval_datasets = {
+        "cnndm_xsum_reference": VicunaFormatDataset(
+            tokenizer=tokenizer,
+            data_path="data/cnndm_xsum_reference.jsonl",
+            num_data=-1,
+        ),
+        "cnndm_xsum_gpt3": VicunaFormatDataset(
+            tokenizer=tokenizer, data_path="data/cnndm_xsum_gpt3.jsonl", num_data=-1
+        ),
+        "cnndm_xsum_writer": VicunaFormatDataset(
+            tokenizer=tokenizer, data_path="data/cnndm_xsum_writer.jsonl", num_data=-1
+        ),
+        "samsum_reference": VicunaFormatDataset(
+            tokenizer=tokenizer, data_path="data/samsum_reference.jsonl", num_data=-1
+        ),
+    }
+    # train_dataset, eval_dataset = train_val_dataset(dataset, val_split=0.032)
 
     trainer = Trainer(
         model=model,
@@ -270,10 +287,10 @@ def train():
             padding="longest",
             max_length=training_args.model_max_length,
         ),
-        compute_metrics=compute_metrics,
+        compute_metrics=partial(compute_metrics, tokenizer=tokenizer),
         preprocess_logits_for_metrics=preprocess_logits_for_metrics,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        train_dataset=dataset,
+        eval_dataset=eval_datasets,
     )
 
     if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):
