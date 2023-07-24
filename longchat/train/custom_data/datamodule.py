@@ -1,5 +1,6 @@
 import json
 from typing import Dict, Union, Optional
+from pathlib import Path
 from dataclasses import dataclass
 import torch
 from torch.nn import functional as F
@@ -207,12 +208,13 @@ class VicunaFormatDataset(Dataset):
     """Dataset for supervised fine-tuning."""
 
     def __init__(
-        self, data_path: str, tokenizer: PreTrainedTokenizerBase, num_data: int
+        self, data_path: str | Path, tokenizer: PreTrainedTokenizerBase, num_data: int
     ):
         super().__init__()
         self.tokenizer = tokenizer
 
         rank0_print("Loading data...")
+        data_path = Path(data_path).expanduser()
         # list_data_dict = json.load(open(data_path, "r"))
         list_data_dict = []
         with open(data_path, "r", encoding="utf-8") as file:
@@ -236,6 +238,7 @@ class VicunaFormatDataset(Dataset):
         roles = {"human": conv.roles[0], "gpt": conv.roles[1]}
 
         # Apply prompt templates
+        source["system_prompt"] = source.get("system_prompt", "")
         if source["system_prompt"]:
             conv.system = source["system_prompt"]
         source = source["conversations"]

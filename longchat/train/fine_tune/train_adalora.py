@@ -27,6 +27,7 @@ import pathlib
 from typing import Dict, Optional
 
 import evaluate
+from datasets import DatasetDict
 from transformers import (
     HfArgumentParser,
     TrainingArguments,
@@ -98,8 +99,8 @@ class TrainArguments(TrainingArguments):
 
 def default_preprocess(eval_pred, ignote_negative_labels=True):
     preds, labels = eval_pred.predictions, eval_pred.label_ids
-    preds = preds[..., :-1, :].contiguous()
-    labels = labels[..., 1:].contiguous()
+    preds = preds[..., :-1]
+    labels = labels[..., 1:]
     if not ignote_negative_labels:
         return preds, labels
 
@@ -109,8 +110,8 @@ def default_preprocess(eval_pred, ignote_negative_labels=True):
 
 def decode_preprocess(eval_pred, tokenizer):
     preds, labels = eval_pred.predictions, eval_pred.label_ids
-    preds = preds[..., :-1, :].contiguous()
-    labels = labels[..., 1:].contiguous()
+    preds = preds[..., :-1]
+    labels = labels[..., 1:]
     mask = labels != IGNORE_TOKEN_ID
     pred_texts = []
     label_texts = []
@@ -125,10 +126,15 @@ def decode_preprocess(eval_pred, tokenizer):
 
 def compute_metrics(eval_pred, tokenizer):
     out = {}
-    metrics, preprocess_fns = [evaluate.load("accuracy"), evaluate.load("rouge")], [
+    metrics = [evaluate.load("accuracy"), evaluate.load("rouge")]
+    preprocess_fns = [
         default_preprocess,
         partial(decode_preprocess, tokenizer=tokenizer),
     ]
+    # metrics, preprocess_fns = [evaluate.load("accuracy"), evaluate.load("rouge")], [
+    #     default_preprocess,
+    #     partial(decode_preprocess, tokenizer=tokenizer),
+    # ]
     for metric, preprocess_fn in zip(metrics, preprocess_fns):
         preds, labels = preprocess_fn(eval_pred)
         out = dict(**out, **metric.compute(predictions=preds, references=labels))
@@ -179,37 +185,33 @@ def get_peft_state_maybe_zero_3(named_params, bias):
 
 def train():
     global local_rank
-    #    parser = argparse.ArgumentParser()
-    #    parser.add_argument(
-    #        "--config_file", type=str, default=None, help="Path to the config file"
-    #    )
-    #    parsed_args, unknown = parser.parse_known_args()
-    #
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--config_file", type=str, default=None, help="Path to the config file"
+    )
+    parsed_args, unknown = parser.parse_known_args()
+
     hf_parser = HfArgumentParser(
         (ModelArguments, DataArguments, TrainArguments)  # type: ignore
     )
     #
-    #    model_args, data_args, training_args = hf_parser.parse_args_into_dataclasses()
-    #    local_rank = training_args.local_rank
-    #    if parsed_args.config_file is not None:
-    #        # Load config file
-    #        with open(parsed_args.config_file, "r") as f:
-    #            config = yaml.safe_load(f)
-    #        # Use config file values only if the corresponding command-line argument is not set
-    #        for k, v in config.items():
-    #            if (
-    #                getattr(model_args, k, None) is None
-    #                and getattr(data_args, k, None) is None
-    #                and getattr(training_args, k, None) is None
-    #            ):
-    #                sys.argv += ["--{}={}".format(k, v)]
-    #
-    #        # Remove the '--config_file' argument and its value
-    #    if "--config_file" in sys.argv:
-    #        config_file_index = sys.argv.index("--config_file")
-    #        del sys.argv[config_file_index : config_file_index + 2]
+    # model_args, data_args, training_args = hf_parser.parse_args_into_dataclasses()
+    if parsed_args.config_file is not None:
+        # Load config file
+        with open(parsed_args.config_file, "r") as f:
+            config = yaml.safe_load(f)
+        # Use config file values only if the corresponding command-line argument is not set
+        for k, v in config.items():
+            if f"--{k}" not in unknown:
+                sys.argv += ["--{}={}".format(k, v)]
+
+        # Remove the '--config_file' argument and its value
+    if "--config_file" in sys.argv:
+        config_file_index = sys.argv.index("--config_file")
+        del sys.argv[config_file_index : config_file_index + 2]
 
     model_args, data_args, training_args = hf_parser.parse_args_into_dataclasses()
+    local_rank = training_args.local_rank
 
     model = LlamaForCausalLM.from_pretrained(
         model_args.model_name_or_path,
@@ -259,22 +261,30 @@ def train():
     dataset = VicunaFormatDataset(
         tokenizer=tokenizer, data_path=data_args.data_path, num_data=data_args.num_data
     )
-    eval_datasets = {
-        "cnndm_xsum_reference": VicunaFormatDataset(
-            tokenizer=tokenizer,
-            data_path="data/cnndm_xsum_reference.jsonl",
-            num_data=-1,
-        ),
-        "cnndm_xsum_gpt3": VicunaFormatDataset(
-            tokenizer=tokenizer, data_path="data/cnndm_xsum_gpt3.jsonl", num_data=-1
-        ),
-        "cnndm_xsum_writer": VicunaFormatDataset(
-            tokenizer=tokenizer, data_path="data/cnndm_xsum_writer.jsonl", num_data=-1
-        ),
-        "samsum_reference": VicunaFormatDataset(
-            tokenizer=tokenizer, data_path="data/samsum_reference.jsonl", num_data=-1
-        ),
-    }
+    eval_datasets = DatasetDict(
+        {
+            "cnndm_xsum_reference": VicunaFormatDataset(
+                tokenizer=tokenizer,
+                data_path="~/disk2/workspace/llm_finetune/LongChat/data/validation_set/cnndm_xsum_reference.jsonl",
+                num_data=-1,
+            ),
+            "cnndm_xsum_gpt3": VicunaFormatDataset(
+                tokenizer=tokenizer,
+                data_path="~/disk2/workspace/llm_finetune/LongChat/data/validation_set/cnndm_xsum_gpt3.jsonl",
+                num_data=-1,
+            ),
+            "cnndm_xsum_writer": VicunaFormatDataset(
+                tokenizer=tokenizer,
+                data_path="~/disk2/workspace/llm_finetune/LongChat/data/validation_set/cnndm_xsum_writer.jsonl",
+                num_data=-1,
+            ),
+            "samsum_reference": VicunaFormatDataset(
+                tokenizer=tokenizer,
+                data_path="~/disk2/workspace/llm_finetune/LongChat/data/validation_set/samsum_reference.jsonl",
+                num_data=-1,
+            ),
+        }
+    )
     # train_dataset, eval_dataset = train_val_dataset(dataset, val_split=0.032)
 
     trainer = Trainer(
