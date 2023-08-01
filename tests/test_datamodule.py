@@ -24,6 +24,7 @@ class TestProcessOne:
         padding_side="right",
         # add_eos_token=True,
         use_fast=False,
+        # legacy=False,
     )
 
     @pytest.fixture
@@ -64,6 +65,7 @@ class TestProcessOne:
                 continue
             conv.append_message(role, sentence["value"])
         del skipped
+        original_text = conv.get_prompt()
 
         tokenized_text, label_mask = data_processor.process_one(
             test_case, self.tokenizer
@@ -76,8 +78,8 @@ class TestProcessOne:
         target_text = self.tokenizer.decode(
             targets[targets != -100], skip_bos_tokens=True
         )
-        original_text = conv.get_prompt()
 
+        print(f"target_text: {target_text}")
         ## tests:
         assert len(target_text.split(self.tokenizer.eos_token)) == len(
             original_text.split(self.tokenizer.eos_token)
