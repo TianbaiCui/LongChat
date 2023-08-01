@@ -51,11 +51,11 @@ from longchat.train.utils.io_utils import (
     safe_save_model_for_hf_trainer,
 )
 
-from longchat.train.monkey_patch.llama_condense_monkey_patch import (
-    replace_llama_with_condense,
-)
-
-replace_llama_with_condense(ratio=1.5)
+# from longchat.train.monkey_patch.llama_condense_monkey_patch import (
+#    replace_llama_with_condense,
+# )
+#
+# replace_llama_with_condense(ratio=1.5)
 
 from longchat.train.monkey_patch.llama_flash_attn_monkey_patch import (
     replace_llama_attn_with_flash_attn,
@@ -92,6 +92,7 @@ class TrainArguments(TrainingArguments):
         },
     )
     report_to: str = field(default="wandb")
+    run_name: str = field(default="wizard-vicuna-dolly-samsum")
     remove_unused_columns: bool = field(default=False)
     dataloader_pin_memory: bool = field(default=True)
     dataloader_num_workers: int = field(default=12)
@@ -227,6 +228,7 @@ def train():
         padding_side="right",
         # add_eos_token=True,
         use_fast=False,
+        # legacy=False,
     )
     # config = AdaLoraConfig(
     #     target_r=4,

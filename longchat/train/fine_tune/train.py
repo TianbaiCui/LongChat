@@ -195,7 +195,11 @@ class LazySupervisedDataset(Dataset):
         self.tokenizer = tokenizer
 
         rank0_print("Loading data...")
-        list_data_dict = json.load(open(data_path, "r"))
+        list_data_dict = []
+        with open(data_path, "r", encoding="utf-8") as file:
+            for line in file:
+                list_data_dict.append(json.loads(line)["vicuna_format"])
+        # list_data_dict = json.load(open(data_path, "r"))
         print(len(list_data_dict))
         if num_data != -1:
             list_data_dict = list_data_dict[:num_data]
